@@ -1,5 +1,5 @@
 
-# Columbrinus
+# Colubrinus
 A Transpiler written in Python to convert a narrow subset of Python into a narrow subset
 of Rust. The resulting Rust will not use the standard library, and so it is suitable for
 running freestanding. It also isn't even close to done yet.
