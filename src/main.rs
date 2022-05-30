@@ -156,7 +156,7 @@ impl Heap {
         self.write_usize32(heap_ptr, 5); // Initial offset to first free cell
         self.format_cell(
             heap_ptr.add(4),
-            HEAP_SIZE - 17,
+            HEAP_SIZE - 9, // 1 byte from alloc byte, 4 each from initial offset & size itself
             false,
             0,
             0
@@ -168,19 +168,126 @@ impl Heap {
 unsafe impl GlobalAlloc for Heap {
 
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        todo!()
+        let mut heap_ptr: *mut u8 = HEAP.get() as *mut u8;
+        let mut next_offset: usize = self.read_usize32(heap_ptr);
+        heap_ptr = heap_ptr.add(next_offset);
+        let mut padding: usize = (heap_ptr as usize) % layout.align();
+        while self.read_cell_size(heap_ptr) < layout.size() + padding {
+            next_offset = self.read_cell_next_offset(heap_ptr);
+            if next_offset == 0 {
+                // No cells are large enough
+                return null_mut();
+            }
+            heap_ptr = heap_ptr.add(next_offset);
+        }
+
+        // Found a cell, claim it
+        heap_ptr.write(1);
+
+        next_offset = self.read_cell_next_offset(heap_ptr);
+        let prev_offset = self.read_cell_prev_offset(heap_ptr);
+        let remaining: usize = self.read_cell_size(heap_ptr) - layout.size() - padding;
+        if remaining < 14 {
+            // Cannot split this cell, so claim the entire
+
+            // Point previous cell, if it exists, at next cell
+            if prev_offset > 0 {
+                heap_ptr = heap_ptr.sub(prev_offset);
+
+                // If there is no next cell, point previous cell at itself
+                if next_offset == 0 {
+                    self.write_cell_next_offset(heap_ptr, 0)
+                }
+                else {
+                    self.write_cell_next_offset(heap_ptr, prev_offset + next_offset);
+                }
+                heap_ptr = heap_ptr.add(prev_offset);
+            }
+
+            // Point next cell, if it exists, at previous cell
+            if next_offset > 0 {
+                heap_ptr = heap_ptr.add(next_offset);
+
+                // If there is no previous cell, point next cell at itself
+                if prev_offset == 0 {
+                    self.write_cell_prev_offset(heap_ptr, 0);
+                }
+                else {
+                    self.write_cell_prev_offset(heap_ptr, prev_offset + next_offset);
+                }
+                heap_ptr = heap_ptr.sub(next_offset);
+            }
+        }
+        else {
+            let nsize: usize = remaining - 5;
+            let csize: usize = layout.size() + padding;
+
+            // Shrink the current cell down to used size
+            self.write_cell_size(heap_ptr, csize);
+            heap_ptr = heap_ptr.add(csize + 1);
+
+            // Create a new cell with the unclaimed memory
+            self.format_cell(
+                heap_ptr,
+                nsize,
+                false,
+                if prev_offset == 0 {0} else {5 + csize + prev_offset},
+                if next_offset == 0 {0} else {next_offset - csize - 5}
+            );
+            heap_ptr = heap_ptr.sub(csize + 1);
+
+            // Point previous cell, if it exists, at new cell
+            if prev_offset > 0 {
+                heap_ptr = heap_ptr.sub(prev_offset);
+                self.write_cell_next_offset(heap_ptr, prev_offset + csize + 1);
+                heap_ptr = heap_ptr.add(prev_offset);
+            }
+
+            // Point next cell, if it exists, at new cell
+            if next_offset > 0 {
+                heap_ptr = heap_ptr.add(next_offset);
+                self.write_cell_prev_offset(heap_ptr, next_offset - 5 - csize);
+                heap_ptr = heap_ptr.sub(next_offset);
+            }
+
+        }
+
+        if padding > 0 {
+            for i in 1..padding + 1 {
+                heap_ptr.add(i).write(0);
+            }
+        }
+        return heap_ptr.add(padding + 1);
     }
 
-    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        todo!()
+    unsafe fn dealloc(&self, ptr: *mut u8, _layout: Layout) {
+        self.free_cell(ptr);
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        todo!()
+        let mut result: *mut u8 = self.alloc(layout);
+        for i in 1..layout.size() + 1 {
+            result.add(i).write(0);
+        }
+        return result;
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        todo!()
+        // TODO: Try and expand existing block first
+        let nlayout = Layout::from_size_align(new_size, layout.align());
+        let mut n: *mut u8;
+        match nlayout {
+            Ok(lay) => n = self.alloc(lay),
+            Err(_) => return null_mut()
+        };
+
+        // Copy over old data
+        for i in 1..layout.size() + 1 {
+            n.add(i).write(ptr.add(i).read())
+        }
+
+        self.dealloc(ptr, layout);
+        return n;
     }
 
 }
