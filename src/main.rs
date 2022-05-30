@@ -2,12 +2,9 @@
 #![no_main]
 
 use core::alloc::{GlobalAlloc, Layout};
-use core::borrow::{Borrow, BorrowMut};
 use core::cell::UnsafeCell;
-use core::ops::{Add, Deref, DerefMut};
 use core::panic::PanicInfo;
-use core::ptr;
-use core::ptr::{null_mut, write};
+use core::ptr::{null_mut};
 
 const STACK_SIZE_CONST: usize = 100000;
 static STACK_SIZE: usize = STACK_SIZE_CONST;
@@ -134,7 +131,7 @@ impl Heap {
         }
         else {
             // There is no free cell with a smaller address, so point the initial offset here
-            let mut heap_ptr: *mut u8 = HEAP.get() as *mut u8;
+            let heap_ptr: *mut u8 = HEAP.get() as *mut u8;
             let next_offset: usize = self.read_usize32(heap_ptr);
 
             // If the initial offset pointed somewhere, update its previous offset
@@ -152,7 +149,7 @@ impl Heap {
 
     unsafe fn setup(&self) {
         // Allocate all memory as a single cell
-        let mut heap_ptr: *mut u8 = HEAP.get() as *mut u8;
+        let heap_ptr: *mut u8 = HEAP.get() as *mut u8;
         self.write_usize32(heap_ptr, 5); // Initial offset to first free cell
         self.format_cell(
             heap_ptr.add(4),
@@ -179,6 +176,7 @@ unsafe impl GlobalAlloc for Heap {
                 return null_mut();
             }
             heap_ptr = heap_ptr.add(next_offset);
+            padding = (heap_ptr as usize) % layout.align();
         }
 
         // Found a cell, claim it
@@ -265,7 +263,7 @@ unsafe impl GlobalAlloc for Heap {
     }
 
     unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
-        let mut result: *mut u8 = self.alloc(layout);
+        let result: *mut u8 = self.alloc(layout);
         for i in 1..layout.size() + 1 {
             result.add(i).write(0);
         }
@@ -275,7 +273,7 @@ unsafe impl GlobalAlloc for Heap {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         // TODO: Try and expand existing block first
         let nlayout = Layout::from_size_align(new_size, layout.align());
-        let mut n: *mut u8;
+        let n: *mut u8;
         match nlayout {
             Ok(lay) => n = self.alloc(lay),
             Err(_) => return null_mut()
