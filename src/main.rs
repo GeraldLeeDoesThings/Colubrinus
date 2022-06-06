@@ -213,6 +213,31 @@ impl Heap {
         ); // Write a cell containing all remaining memory
     }
 
+    unsafe fn claim(&self, at: *mut u8) {
+        let prev_offset: usize = self.read_cell_prev_offset(at);
+        let next_offset: usize = self.read_cell_next_offset(at);
+        at.write(1);
+        if prev_offset > 0 {
+            if next_offset > 0 {
+                self.fix_offset_pair(at.sub(prev_offset), at.add(next_offset));
+            }
+            else {
+                self.write_cell_next_offset(at.sub(prev_offset), 0);
+            }
+        }
+        else if next_offset > 0 {
+            let heap_ptr: *mut u8 = HEAP.get() as *mut u8;
+            self.write_usize32(
+                heap_ptr, at.add(next_offset).offset_from(heap_ptr) as usize
+            );
+        }
+    }
+
+    unsafe fn split(&self, tosize: usize) -> bool {
+        // TODO: Implement
+        return false;
+    }
+
 }
 
 unsafe impl GlobalAlloc for Heap {
