@@ -3,6 +3,7 @@
 
 use core::alloc::{GlobalAlloc, Layout};
 use core::cell::UnsafeCell;
+use core::cmp::min;
 use core::panic::PanicInfo;
 use core::ptr::{null_mut};
 
@@ -95,13 +96,28 @@ impl Heap {
         return heap_ptr;
     }
 
+    unsafe fn fix_offset_pair(&self, small: *mut u8, large: *mut u8) {
+        let small_next: usize = large.offset_from(small) as usize;
+        self.write_cell_next_offset(small, small_next);
+        self.write_cell_prev_offset(large, small_next);
+    }
+
+    unsafe fn fix_offset_triple(&self, small: *mut u8, mid: *mut u8, large: *mut u8) {
+        let small_next: usize = mid.offset_from(small) as usize;
+        let mid_next: usize = large.offset_from(mid) as usize;
+        self.write_cell_next_offset(small, small_next);
+        self.write_cell_prev_offset(mid, small_next);
+        self.write_cell_next_offset(mid, mid_next);
+        self.write_cell_prev_offset(large, mid_next);
+    }
+
     unsafe fn free_cell(&self, at: *mut u8) {
         // Note that at is a pointer to the first byte of USED memory, not the start of the cell
         let mut alloc_bit_offset: usize = 1;
         while at.sub(alloc_bit_offset).read() != 1 {
             alloc_bit_offset += 1;
         }
-        let current_alloc_addr: usize = at as usize - alloc_bit_offset;
+        let current_alloc_addr: *mut u8 = at.sub(alloc_bit_offset);
         at.sub(alloc_bit_offset).write(0);
 
         // Find the closest free cell with a lower address
@@ -111,22 +127,16 @@ impl Heap {
             // A cell was found, store the offset to the next cell
             let next_offset: usize = self.read_cell_next_offset(prev_cell);
 
-            // Make the previous cell point to this cell
-            self.write_cell_next_offset(
-                prev_cell,
-                current_alloc_addr - prev_cell as usize
-            );
-
             if next_offset > 0 {
                 // If the previous cell was pointing to another cell, that cell must be the
                 // closest free cell with a larger address, so update its prev offset
-                let next_cell = prev_cell.add(
-                    self.read_cell_next_offset(prev_cell)
-                );
-                self.write_cell_prev_offset(
-                    next_cell,
-                    next_cell as usize - current_alloc_addr
-                );
+                let next_cell = prev_cell.add(next_offset);
+                self.fix_offset_triple(prev_cell, current_alloc_addr, next_cell);
+            }
+            else {
+                self.fix_offset_pair(prev_cell, current_alloc_addr);
+                // There is no larger cell, mark this by setting offset to 0
+                self.write_cell_next_offset(current_alloc_addr, 0);
             }
         }
         else {
@@ -137,14 +147,57 @@ impl Heap {
             // If the initial offset pointed somewhere, update its previous offset
             if next_offset > 0 {
                 let next_cell = heap_ptr.add(next_offset);
-                self.write_cell_prev_offset(
-                    next_cell,
-                    next_cell as usize - current_alloc_addr
-                );
+                self.fix_offset_pair(current_alloc_addr, next_cell);
             }
-            self.write_usize32(heap_ptr, current_alloc_addr - heap_ptr as usize);
+            self.write_usize32(heap_ptr, current_alloc_addr.offset_from(heap_ptr) as usize);
         }
-        // TODO: Try to merge cells
+        self.try_merge(current_alloc_addr);
+    }
+
+    unsafe fn get_first_cell_byte(&self, cell: *mut u8) -> *mut u8 {
+        return cell.sub(4);
+    }
+
+    unsafe fn get_last_cell_byte(&self, cell: *mut u8) -> *mut u8 {
+        return cell.add(self.read_cell_size(cell));
+    }
+
+    unsafe fn are_adjacent(&self, cell_a: *mut u8, cell_b: *mut u8) -> bool {
+        return min(
+            self.get_last_cell_byte(cell_a).offset_from(
+                self.get_first_cell_byte(cell_b)
+            ),
+            self.get_first_cell_byte(cell_a).offset_from(
+                self.get_last_cell_byte(cell_b)
+            )
+        ) < 13;
+    }
+
+    unsafe fn merge(&self, small: *mut u8, large: *mut u8) {
+        self.write_cell_size(
+            small,
+            self.get_last_cell_byte(large).offset_from(small) as usize - 1
+        );
+        let old_next_offset: usize = self.read_cell_next_offset(large);
+        if old_next_offset > 0 {
+            self.fix_offset_pair(small, large.add(old_next_offset));
+        }
+    }
+
+    unsafe fn try_merge(&self, at: *mut u8) -> bool {
+        let prev_offset: usize = self.read_cell_prev_offset(at);
+        let next_offset: usize = self.read_cell_next_offset(at);
+        if prev_offset > 0 && self.are_adjacent(at.sub(prev_offset), at) {
+            self.merge(at.sub(prev_offset), at);
+            self.try_merge(at.sub(prev_offset));
+            return true;
+        }
+        if next_offset > 0 && self.are_adjacent(at.add(next_offset), at) {
+            self.merge(at, at.add(next_offset));
+            self.try_merge(at);
+            return true;
+        }
+        return false;
     }
 
     unsafe fn setup(&self) {
