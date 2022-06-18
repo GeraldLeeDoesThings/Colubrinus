@@ -110,10 +110,7 @@ impl Heap {
 
     unsafe fn free_cell(&self, at: *mut u8) {
         // Note that at is a pointer to the first byte of USED memory, not the start of the cell
-        let mut alloc_bit_offset: usize = 1;
-        while at.sub(alloc_bit_offset).read() != 1 {
-            alloc_bit_offset += 1;
-        }
+        let mut alloc_bit_offset: usize = self.get_alloc_bit_offset(at);
         let current_alloc_addr: *mut u8 = at.sub(alloc_bit_offset);
         at.sub(alloc_bit_offset).write(0);
 
@@ -235,7 +232,6 @@ impl Heap {
     }
 
     unsafe fn shrink(&self, cellptr: *mut u8, tosize: usize) -> bool {
-        // TODO: Implement
         let cursize: usize = self.read_cell_size(cellptr);
         return if cursize < tosize {
             false
@@ -263,6 +259,15 @@ impl Heap {
             // Refuse to shrink, cannot create another cell with that memory
             true
         }
+    }
+
+    unsafe fn get_alloc_bit_offset(&self, from: *mut u8) -> usize {
+        // Note that at is a pointer to the first byte of USED memory, not the start of the cell
+        let mut alloc_bit_offset: usize = 1;
+        while from.sub(alloc_bit_offset).read() != 1 {
+            alloc_bit_offset += 1;
+        }
+        return alloc_bit_offset;
     }
 
     #[inline(always)]
@@ -294,7 +299,10 @@ unsafe impl GlobalAlloc for Heap {
             padding = (heap_ptr as usize) % layout.align();
         }
 
-        self.shrink(heap_ptr, layout.size() + padding);
+        if !self.shrink(heap_ptr, layout.size() + padding) {
+            // Something is very wrong with the shrink, should never happen
+            return null_mut();
+        }
         self.claim(heap_ptr);
 
         if padding > 0 {
@@ -318,7 +326,24 @@ unsafe impl GlobalAlloc for Heap {
     }
 
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        // TODO: Try and expand existing block first
+        // Attempt to use part of the next cell to realloc without copy
+        let alloc_bit_offset: usize = self.get_alloc_bit_offset(ptr);
+        let cursize: usize = self.read_cell_size(ptr.sub(alloc_bit_offset));
+        if cursize >= new_size {
+            return ptr;
+        }
+        let maybenext: *mut u8 = ptr.sub(alloc_bit_offset).add(cursize + 5);
+        // If the next cell isn't also in use
+        if maybenext.read() == 0 {
+            // Shrink it to size to minimize space wastage
+            if self.shrink(maybenext, new_size - cursize) {
+                self.claim(maybenext);
+                self.write_cell_size(ptr, cursize + 5 + self.read_cell_size(maybenext));
+                return ptr;
+            }
+            // Not enough space, must attempt with copy
+        }
+
         let nlayout = Layout::from_size_align(new_size, layout.align());
         let n: *mut u8;
         match nlayout {
