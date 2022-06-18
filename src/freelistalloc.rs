@@ -12,10 +12,10 @@ static mut HEAP: UnsafeCell<[u8; HEAP_SIZE_CONST]> = UnsafeCell::new([0; HEAP_SI
 
 
 // This must be synchronized to support multithreading
-struct Heap {}
+pub(crate) struct Heap {}
 
 #[global_allocator]
-static ALLOCATOR: Heap = Heap {};
+pub(crate) static ALLOCATOR: Heap = Heap {};
 
 impl Heap {
 
@@ -110,7 +110,7 @@ impl Heap {
 
     unsafe fn free_cell(&self, at: *mut u8) {
         // Note that at is a pointer to the first byte of USED memory, not the start of the cell
-        let mut alloc_bit_offset: usize = self.get_alloc_bit_offset(at);
+        let alloc_bit_offset: usize = self.get_alloc_bit_offset(at);
         let current_alloc_addr: *mut u8 = at.sub(alloc_bit_offset);
         at.sub(alloc_bit_offset).write(0);
 
@@ -194,7 +194,7 @@ impl Heap {
         return false;
     }
 
-    unsafe fn setup(&self) {
+    pub(crate) unsafe fn setup(&self) {
         // Allocate all memory as a single cell
         let heap_ptr: *mut u8 = HEAP.get() as *mut u8;
         self.write_usize32(heap_ptr, 5); // Initial offset to first free cell
