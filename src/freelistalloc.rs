@@ -1,20 +1,21 @@
-use core::alloc::{GlobalAlloc, Layout};
-use core::cell::UnsafeCell;
-use core::cmp::min;
-use core::ptr::{null_mut};
+#[cfg(not(test))] use core::alloc::{GlobalAlloc, Layout};
+#[cfg(not(test))] use core::cell::UnsafeCell;
+#[cfg(not(test))] use core::cmp::min;
+#[cfg(not(test))] use core::ptr::{null_mut};
+#[cfg(test)]      use std::alloc::{GlobalAlloc, Layout};
+#[cfg(test)]      use std::cell::UnsafeCell;
+#[cfg(test)]      use std::cmp::min;
+#[cfg(test)]      use std::ptr::{null_mut};
 
-const STACK_SIZE_CONST: usize = 100000;
-static STACK_SIZE: usize = STACK_SIZE_CONST;
-static mut STACK: [u8; STACK_SIZE_CONST] = [0; STACK_SIZE_CONST];
-const HEAP_SIZE_CONST: usize = 2000000;
-static HEAP_SIZE: usize = HEAP_SIZE_CONST;
-static mut HEAP: UnsafeCell<[u8; HEAP_SIZE_CONST]> = UnsafeCell::new([0; HEAP_SIZE_CONST]);
+#[cfg(not(test))] const HEAP_SIZE: usize = 2000000;
+#[cfg(test)]      const HEAP_SIZE: usize = 2000000;
+static mut HEAP: UnsafeCell<[u8; HEAP_SIZE]> = UnsafeCell::new([0; HEAP_SIZE]);
 
 
 // This must be synchronized to support multithreading
 pub(crate) struct Heap {}
 
-#[global_allocator]
+#[cfg_attr(not(test), global_allocator)]
 pub(crate) static ALLOCATOR: Heap = Heap {};
 
 impl Heap {
@@ -360,4 +361,13 @@ unsafe impl GlobalAlloc for Heap {
         return n;
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn placeholder() {
+        let result = 2 + 2;
+        assert_eq!(result, 4);
+    }
 }
