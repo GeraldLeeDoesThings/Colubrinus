@@ -11,6 +11,7 @@ static HEAP_SIZE: usize = HEAP_SIZE_CONST;
 static mut HEAP: UnsafeCell<[u8; HEAP_SIZE_CONST]> = UnsafeCell::new([0; HEAP_SIZE_CONST]);
 
 
+// This must be synchronized to support multithreading
 struct Heap {}
 
 #[global_allocator]
@@ -226,12 +227,52 @@ impl Heap {
             self.write_usize32(
                 heap_ptr, at.add(next_offset).offset_from(heap_ptr) as usize
             );
+            self.write_cell_prev_offset(at.add(next_offset), 0);
+        }
+        else {
+            self.write_usize32(HEAP.get() as *mut u8, 0);
         }
     }
 
-    unsafe fn split(&self, tosize: usize) -> bool {
+    unsafe fn shrink(&self, cellptr: *mut u8, tosize: usize) -> bool {
         // TODO: Implement
-        return false;
+        let cursize: usize = self.read_cell_size(cellptr);
+        return if cursize < tosize {
+            false
+        } else if cursize == tosize {
+            true
+        } else if cursize - tosize >= 14 {
+            self.write_cell_size(cellptr, tosize);
+            self.format_cell(
+                cellptr.add(tosize + 1),
+                cursize - tosize - 13,
+                false, 0,
+                0
+            );
+            if self.has_next_cell(cellptr) {
+                self.fix_offset_triple(
+                    cellptr,
+                    cellptr.add(tosize + 5),
+                    cellptr.add(self.read_cell_next_offset(cellptr))
+                );
+            } else {
+                self.fix_offset_pair(cellptr, cellptr.add(tosize + 5));
+            }
+            true
+        } else {
+            // Refuse to shrink, cannot create another cell with that memory
+            true
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn has_next_cell(&self, cell: *mut u8) -> bool {
+        return self.read_cell_next_offset(cell) > 0;
+    }
+
+    #[inline(always)]
+    unsafe fn has_prev_cell(&self, cell: *mut u8) -> bool {
+        return self.read_cell_prev_offset(cell) > 0;
     }
 
 }
@@ -253,76 +294,8 @@ unsafe impl GlobalAlloc for Heap {
             padding = (heap_ptr as usize) % layout.align();
         }
 
-        // Found a cell, claim it
-        heap_ptr.write(1);
-
-        next_offset = self.read_cell_next_offset(heap_ptr);
-        let prev_offset = self.read_cell_prev_offset(heap_ptr);
-        let remaining: usize = self.read_cell_size(heap_ptr) - layout.size() - padding;
-        if remaining < 14 {
-            // Cannot split this cell, so claim the entire
-
-            // Point previous cell, if it exists, at next cell
-            if prev_offset > 0 {
-                heap_ptr = heap_ptr.sub(prev_offset);
-
-                // If there is no next cell, point previous cell at itself
-                if next_offset == 0 {
-                    self.write_cell_next_offset(heap_ptr, 0)
-                }
-                else {
-                    self.write_cell_next_offset(heap_ptr, prev_offset + next_offset);
-                }
-                heap_ptr = heap_ptr.add(prev_offset);
-            }
-
-            // Point next cell, if it exists, at previous cell
-            if next_offset > 0 {
-                heap_ptr = heap_ptr.add(next_offset);
-
-                // If there is no previous cell, point next cell at itself
-                if prev_offset == 0 {
-                    self.write_cell_prev_offset(heap_ptr, 0);
-                }
-                else {
-                    self.write_cell_prev_offset(heap_ptr, prev_offset + next_offset);
-                }
-                heap_ptr = heap_ptr.sub(next_offset);
-            }
-        }
-        else {
-            let nsize: usize = remaining - 5;
-            let csize: usize = layout.size() + padding;
-
-            // Shrink the current cell down to used size
-            self.write_cell_size(heap_ptr, csize);
-            heap_ptr = heap_ptr.add(csize + 1);
-
-            // Create a new cell with the unclaimed memory
-            self.format_cell(
-                heap_ptr,
-                nsize,
-                false,
-                if prev_offset == 0 {0} else {5 + csize + prev_offset},
-                if next_offset == 0 {0} else {next_offset - csize - 5}
-            );
-            heap_ptr = heap_ptr.sub(csize + 1);
-
-            // Point previous cell, if it exists, at new cell
-            if prev_offset > 0 {
-                heap_ptr = heap_ptr.sub(prev_offset);
-                self.write_cell_next_offset(heap_ptr, prev_offset + csize + 1);
-                heap_ptr = heap_ptr.add(prev_offset);
-            }
-
-            // Point next cell, if it exists, at new cell
-            if next_offset > 0 {
-                heap_ptr = heap_ptr.add(next_offset);
-                self.write_cell_prev_offset(heap_ptr, next_offset - 5 - csize);
-                heap_ptr = heap_ptr.sub(next_offset);
-            }
-
-        }
+        self.shrink(heap_ptr, layout.size() + padding);
+        self.claim(heap_ptr);
 
         if padding > 0 {
             for i in 1..padding + 1 {
