@@ -1,7 +1,7 @@
 #![cfg_attr(not(test), no_std)]
 #![cfg_attr(not(test), no_main)]
 
-use core::panic::PanicInfo;
+#[cfg(not(test))] use core::panic::PanicInfo;
 mod freelistalloc;
 
 

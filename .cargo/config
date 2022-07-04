@@ -3,5 +3,5 @@
 target = "x86-unknown-bare_metal.json"
 
 [alias]
-test_wstd = "test --target=x86_64-unknown-linux-gnu"
+test_wstd = "test --target=x86_64-pc-windows-msvc -- --nocapture"
 build_bm = "build -Z build-std=core,compiler_builtins"

@@ -365,9 +365,15 @@ unsafe impl GlobalAlloc for Heap {
 
 #[cfg(test)]
 mod tests {
+    use crate::freelistalloc::ALLOCATOR;
+    use crate::freelistalloc::HEAP;
+
     #[test]
-    fn placeholder() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
+    fn setup() {
+        unsafe {
+            ALLOCATOR.setup();
+            // println!("{}", (HEAP.get() as *mut u8).add(3).read());
+            assert_eq!((HEAP.get() as *mut u8).add(3).read(), 5);
+        }
     }
 }
