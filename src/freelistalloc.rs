@@ -8,7 +8,7 @@
 #[cfg(test)]      use std::ptr::{null_mut};
 
 #[cfg(not(test))] const HEAP_SIZE: usize = 2000000;
-#[cfg(test)]      const HEAP_SIZE: usize = 2000000;
+#[cfg(test)]      const HEAP_SIZE: usize = 70;
 static mut HEAP: UnsafeCell<[u8; HEAP_SIZE]> = UnsafeCell::new([0; HEAP_SIZE]);
 
 
@@ -198,7 +198,7 @@ impl Heap {
     pub(crate) unsafe fn setup(&self) {
         // Allocate all memory as a single cell
         let heap_ptr: *mut u8 = HEAP.get() as *mut u8;
-        self.write_usize32(heap_ptr, 5); // Initial offset to first free cell
+        self.write_usize32(heap_ptr, 8); // Initial offset to first free cell
         self.format_cell(
             heap_ptr.add(4),
             HEAP_SIZE - 9, // 1 byte from alloc byte, 4 each from initial offset & size itself
@@ -289,7 +289,7 @@ unsafe impl GlobalAlloc for Heap {
         let mut heap_ptr: *mut u8 = HEAP.get() as *mut u8;
         let mut next_offset: usize = self.read_usize32(heap_ptr);
         heap_ptr = heap_ptr.add(next_offset);
-        let mut padding: usize = (heap_ptr as usize) % layout.align();
+        let mut padding: usize = if layout.align() == 0 { 0 } else { (heap_ptr as usize) % layout.align() };
         while self.read_cell_size(heap_ptr) < layout.size() + padding {
             next_offset = self.read_cell_next_offset(heap_ptr);
             if next_offset == 0 {
@@ -365,15 +365,76 @@ unsafe impl GlobalAlloc for Heap {
 
 #[cfg(test)]
 mod tests {
-    use crate::freelistalloc::ALLOCATOR;
+    use core::alloc::{GlobalAlloc, Layout};
+    use core::ops::Add;
+
+    unsafe fn dump_memory() {
+        let mut copy: [u8; HEAP_SIZE] = [0; HEAP_SIZE];
+        for i in 0..HEAP_SIZE {
+            copy[i] = (HEAP.get() as *mut u8).add(i).read();
+        }
+        println!("{:?}", copy);
+    }
+
+    unsafe fn zero_memory() {
+        for i in 0..HEAP_SIZE {
+            (HEAP.get() as *mut u8).add(i).write(0);
+        }
+    }
+
+    use crate::freelistalloc::{ALLOCATOR, HEAP_SIZE};
     use crate::freelistalloc::HEAP;
 
     #[test]
     fn setup() {
         unsafe {
+            zero_memory();
             ALLOCATOR.setup();
             // println!("{}", (HEAP.get() as *mut u8).add(3).read());
-            assert_eq!((HEAP.get() as *mut u8).add(3).read(), 5);
+            assert_eq!((HEAP.get() as *mut u8).add(3).read(), 8);
         }
     }
+
+    #[test]
+    fn read_u32() {
+        unsafe {
+            zero_memory();
+            ALLOCATOR.setup();
+            assert_eq!(ALLOCATOR.read_usize32(HEAP.get() as *mut u8), 8);
+        }
+    }
+
+    #[test]
+    fn single_alloc() {
+        unsafe {
+            zero_memory();
+            ALLOCATOR.setup();
+            ALLOCATOR.alloc(Layout::from_size_align_unchecked(8, 0));
+
+            assert_eq!(ALLOCATOR.read_usize32(HEAP.get() as *mut u8), 8 + 8 + 5);
+            // Should be allocated
+            assert_eq!((HEAP.get() as *mut u8).add(8).read(), 1);
+            // Should be free
+            assert_eq!((HEAP.get() as *mut u8).add(8 + 8 + 5).read(), 0);
+        }
+    }
+
+    #[test]
+    fn double_alloc() {
+        unsafe {
+            zero_memory();
+            ALLOCATOR.setup();
+            ALLOCATOR.alloc(Layout::from_size_align_unchecked(8, 0));
+            ALLOCATOR.alloc(Layout::from_size_align_unchecked(8, 0));
+
+            assert_eq!(ALLOCATOR.read_usize32(HEAP.get() as *mut u8), 8 + 2 * (8 + 5));
+            // Should be allocated
+            assert_eq!((HEAP.get() as *mut u8).add(8).read(), 1);
+            assert_eq!((HEAP.get() as *mut u8).add(8 + 8 + 5).read(), 1);
+            // Should be free
+            assert_eq!((HEAP.get() as *mut u8).add(8 + 2 * (8 + 5)).read(), 0);
+            dump_memory();
+        }
+    }
+
 }
